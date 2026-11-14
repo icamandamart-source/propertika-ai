@@ -1,0 +1,35 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+
+# Hasil pengujian Playwright
+test-results/
+playwright-report/
+blob-report/
+
+# Hasil bundel server (dibuat oleh `npm run build`)
+server.js
+server.js.map
+
+# Foto yang diunggah pengguna
+uploads/
+
+# Variabel lingkungan
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Hasil backup Firestore (berisi data pribadi pengguna)
+backups/*.json
+
+# Status internal alat bantu (bukan bagian aplikasi)
+.claude-flow/
+
+# Kredensial Firebase Admin
+service-account*.json
+*firebase-adminsdk*.json
+
+.DS_Store

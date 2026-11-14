@@ -1,0 +1,262 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function text(value, min, max) {
+      return value is string && value.size() >= min && value.size() <= max;
+    }
+
+    function safeId(value, max) {
+      return text(value, 1, max) && value.matches('^[A-Za-z0-9._-]+$');
+    }
+
+    function orderData(orderId) {
+      return get(/databases/$(database)/documents/orders/$(orderId)).data;
+    }
+
+    // Ulasan hanya boleh dibuat dari pesanan selesai milik sendiri dan listing
+    // yang benar-benar ada di pesanan tersebut. Pemilik listing tidak boleh
+    // mengulas produknya sendiri.
+    function verifiedPurchase(orderId, listingId) {
+      let order = orderData(orderId);
+      return order.get('buyerUid', '') == request.auth.uid
+        && order.get('status', '') == 'selesai'
+        && listingId in order.get('listingIds', [])
+        && get(/databases/$(database)/documents/listings/$(listingId)).data.get('ownerId', '')
+          != request.auth.uid;
+    }
+
+    // Nilai field tetap sama seperti dokumen lama (atau tidak dikirim sama sekali).
+    function keep(field) {
+      return request.resource.data.get(field, resource.data.get(field, null))
+        == resource.data.get(field, null);
+    }
+
+    function validListing() {
+      let d = request.resource.data;
+      return text(d.get('title', ''), 3, 200)
+        && d.get('category', '') in ['Rumah', 'Apartemen', 'Tanah', 'Furniture']
+        && d.get('purpose', '') in ['Dijual', 'Disewa']
+        && d.get('price', -1) is number && d.get('price', -1) >= 0
+        && text(d.get('location', ''), 0, 200)
+        && text(d.get('city', ''), 0, 100)
+        && text(d.get('description', ''), 0, 8000)
+        && text(d.get('ownerName', ''), 0, 120)
+        && text(d.get('contactPhone', ''), 0, 40)
+        && d.get('imageUrl', '') is string
+        && d.get('images', null) is list && d.images.size() <= 4
+        && d.get('features', null) is list && d.features.size() <= 50
+        && d.get('bedrooms', 0) is number && d.get('bedrooms', 0) >= 0
+        && d.get('bathrooms', 0) is number && d.get('bathrooms', 0) >= 0
+        && d.get('landArea', 0) is number && d.get('landArea', 0) >= 0
+        && d.get('buildingArea', 0) is number && d.get('buildingArea', 0) >= 0
+        && d.get('stock', 0) is number && d.get('stock', 0) >= 0
+        && d.get('sold', 0) is number && d.get('sold', 0) >= 0
+        && d.get('createdAt', '') is string;
+    }
+
+    function validAccount() {
+      let d = request.resource.data;
+      let p = d.get('profile', null);
+      let s = d.get('seller', null);
+      return d.get('role', '') in ['buyer', 'seller']
+        && p is map
+        && text(p.get('name', ''), 0, 120)
+        && text(p.get('email', ''), 0, 254)
+        && text(p.get('phone', ''), 0, 40)
+        && d.get('cart', null) is list && d.cart.size() <= 500
+        && d.get('addresses', null) is list && d.addresses.size() <= 50
+        && d.get('claimedVoucherCodes', null) is list && d.claimedVoucherCodes.size() <= 100
+        && d.get('favorites', null) is list && d.favorites.size() <= 500
+        && (s == null || (s is map && text(s.get('businessName', ''), 0, 200)));
+    }
+
+    function validInquiryCreate() {
+      let d = request.resource.data;
+      return d.get('fromUid', '') == request.auth.uid
+        && text(d.get('toUid', ''), 1, 128)
+        && text(d.get('listingId', ''), 0, 128)
+        && text(d.get('listingTitle', ''), 0, 200)
+        && text(d.get('name', ''), 0, 120)
+        && text(d.get('phone', ''), 0, 40)
+        && text(d.get('message', ''), 1, 4000)
+        && d.get('createdAt', '') is string
+        && (!('read' in d) || d.read is bool);
+    }
+
+    function validReviewContent() {
+      let d = request.resource.data;
+      return d.get('rating', 0) is number
+        && d.get('rating', 0) >= 1 && d.get('rating', 0) <= 5
+        && text(d.get('comment', ''), 0, 1000)
+        && text(d.get('name', ''), 0, 120);
+    }
+
+    // Katalog properti/produk. Semua orang boleh membaca; penulis hanya pemilik
+    // atau admin. Foto harus berupa URL, bukan data URL base64.
+    match /listings/{listingId} {
+      allow read: if true;
+
+      allow create: if isAdmin() || (
+        signedIn()
+        && validListing()
+        && request.resource.data.get('ownerId', '') == request.auth.uid
+      );
+
+      allow update: if isAdmin() || (
+        signedIn()
+        && resource.data.ownerId == request.auth.uid
+        && keep('ownerId')
+        && keep('createdAt')
+        && keep('rating')
+        && keep('reviewCount')
+        && validListing()
+      );
+
+      allow delete: if isAdmin() || (
+        signedIn() && resource.data.ownerId == request.auth.uid
+      );
+    }
+
+    // Data pribadi akun: profil, peran, keranjang, alamat, favorit, voucher.
+    // Peran dibatasi buyer/seller; hak admin hanya lewat koleksi `admins`.
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create, update: if isAdmin() || (isOwner(uid) && validAccount());
+      allow delete: if isOwner(uid) || isAdmin();
+    }
+
+    // Pesan masuk bersifat lintas akun, jadi disimpan top-level.
+    match /inquiries/{inquiryId} {
+      allow create: if signedIn() && validInquiryCreate();
+
+      allow read: if signedIn() && (
+        resource.data.fromUid == request.auth.uid
+        || resource.data.toUid == request.auth.uid
+        || isAdmin()
+      );
+
+      allow update: if signedIn() && (
+        resource.data.toUid == request.auth.uid
+        || isAdmin()
+      ) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+        ['read', 'updatedAt']
+      ) && (!('read' in request.resource.data) || request.resource.data.read is bool);
+
+      allow delete: if signedIn() && (
+        resource.data.fromUid == request.auth.uid
+        || resource.data.toUid == request.auth.uid
+        || isAdmin()
+      );
+    }
+
+    // Pesanan. `sellerUids` didenormalisasi dari item agar penjual bisa membaca
+    // pesanan yang memuat produknya tanpa membuka data pesanan lain.
+    match /orders/{orderId} {
+      allow read: if signedIn() && (
+        resource.data.buyerUid == request.auth.uid
+        || request.auth.uid in resource.data.sellerUids
+        || isAdmin()
+      );
+
+      // Pesanan hanya boleh dibuat oleh server (Admin SDK) agar harga, voucher,
+      // dan stok dihitung ulang. Klien tidak boleh menulis dokumen ini langsung.
+      allow create: if false;
+
+      allow update: if isAdmin() || (
+        signedIn()
+        && resource.data.buyerUid == request.auth.uid
+        && (
+          (resource.data.status == 'belum-dibayar'
+            && (resource.data.paymentMethodId == 'cod'
+              || resource.data.paymentMethod == 'COD / Bayar di Tempat')
+            && request.resource.data.status == 'dikemas'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+              ['status', 'updatedAt', 'paidAt']
+            ))
+          || (resource.data.status in ['belum-dibayar', 'dikemas']
+            && request.resource.data.status == 'dibatalkan'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+              ['status', 'updatedAt']
+            ))
+          || (resource.data.status == 'dikirim'
+            && request.resource.data.status == 'selesai'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+              ['status', 'updatedAt', 'completedAt']
+            ))
+        )
+      ) || (
+        signedIn()
+        && request.auth.uid in resource.data.sellerUids
+        && (
+          (resource.data.status == 'dikemas'
+            && request.resource.data.status == 'dikirim')
+        )
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+          ['status', 'updatedAt', 'paidAt']
+        )
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if true;
+
+      allow create: if signedIn()
+        && request.resource.data.get('authorUid', '') == request.auth.uid
+        && safeId(request.resource.data.get('orderId', ''), 128)
+        && safeId(request.resource.data.get('listingId', ''), 128)
+        && validReviewContent()
+        && request.resource.data.get('createdAt', '') is string
+        && verifiedPurchase(
+          request.resource.data.orderId,
+          request.resource.data.listingId
+        );
+
+      allow update: if isAdmin() || (
+        signedIn()
+        && resource.data.authorUid == request.auth.uid
+        && keep('authorUid')
+        && keep('listingId')
+        && keep('orderId')
+        && keep('createdAt')
+        && validReviewContent()
+      );
+
+      allow delete: if isAdmin() || (
+        signedIn() && resource.data.authorUid == request.auth.uid
+      );
+    }
+
+    // Promo dan pengaturan katalog. Dibaca publik, diubah hanya admin.
+    match /platform/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Dokumen penanda admin. Admin pertama dibuat manual dari Firebase Console.
+    match /admins/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "PROPERTIKA AI",
+  "description": "Platform marketplace properti premium masa depan dengan fitur visualisasi AI untuk mempermudah pencarian dan desain properti.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
