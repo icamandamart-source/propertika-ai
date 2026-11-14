@@ -2,6 +2,8 @@ import { useSyncExternalStore } from 'react';
 import type {
   AccountData,
   Address,
+  AuditAction,
+  AuditLogEntry,
   AuthUser,
   Banner,
   CartItem,
@@ -45,6 +47,7 @@ import {
   saveReview as saveCloudReview,
   subscribeAccount,
   subscribeAllOrders,
+  subscribeAuditLogs,
   subscribeBuyerOrders,
   subscribeInquiries,
   subscribeListings,
@@ -53,7 +56,9 @@ import {
   subscribeSellerOrders,
   updateInquiryRead as updateCloudInquiryRead,
   updateOrderStatus as updateCloudOrderStatus,
+  appendAuditLog,
 } from './firestore';
+import { createAuditEntry, MAX_AUDIT_LOGS, mergeAuditLogs, normalizeAuditEntry } from './audit-log';
 import {
   calculateTotals,
   hydrateCart,
@@ -80,6 +85,8 @@ interface PersistedState {
   guest: ShoppingData;
   /** Promo, pesanan, dan pengaturan admin yang dibagi di peramban ini. */
   platform: PlatformData;
+  /** Catatan tindakan admin di peramban ini (mode lokal); cloud digabung terpisah. */
+  auditLogs: AuditLogEntry[];
 }
 
 interface AppState extends PersistedState {
@@ -97,6 +104,8 @@ interface AppState extends PersistedState {
   cloudPlatform: SharedPlatform | null;
   /** Ulasan publik dari Firestore; null berarti belum termuat. */
   cloudReviews: ProductReview[] | null;
+  /** Catatan audit admin dari Firestore; null berarti belum termuat. */
+  cloudAuditLogs: AuditLogEntry[] | null;
   /** True bila dokumen `admins/{uid}` ada. Hanya untuk tampilan; aturan tetap di rules. */
   cloudAdmin: boolean;
   /** True setelah pemeriksaan admin Firestore selesai. */
@@ -132,6 +141,8 @@ export interface AppView {
   reviews: ProductReview[];
   stores: StoreInfo[];
   categories: { name: string; label: string }[];
+  /** Catatan tindakan admin, terbaru lebih dulu. */
+  auditLogs: AuditLogEntry[];
 }
 
 const SEED_IDS = new Set(SEED_LISTINGS.map((listing) => listing.id));
@@ -434,6 +445,7 @@ function loadState(): AppState {
     legacyListings: [],
     guest: emptyShopping(),
     platform: emptyPlatform(),
+    auditLogs: [],
     activeUid: null,
     pendingRole: null,
     toast: null,
@@ -442,6 +454,7 @@ function loadState(): AppState {
     cloudInquiries: null,
     cloudPlatform: null,
     cloudReviews: null,
+    cloudAuditLogs: null,
     cloudAdmin: false,
     cloudAdminReady: false,
   };
@@ -483,6 +496,12 @@ function loadState(): AppState {
     legacyListings,
     guest: normalizeShopping(parsed.guest),
     platform: normalizePlatform(parsed.platform),
+    auditLogs: Array.isArray(parsed.auditLogs)
+      ? parsed.auditLogs
+          .map(normalizeAuditEntry)
+          .filter((item): item is AuditLogEntry => Boolean(item))
+          .slice(0, MAX_AUDIT_LOGS)
+      : [],
     activeUid: null,
     pendingRole: null,
     toast: null,
@@ -491,6 +510,7 @@ function loadState(): AppState {
     cloudInquiries: null,
     cloudPlatform: null,
     cloudReviews: null,
+    cloudAuditLogs: null,
     cloudAdmin: false,
     cloudAdminReady: false,
   };
@@ -663,6 +683,7 @@ function buildView(state: AppState): AppView {
     reviews,
     stores: buildStores(listings),
     categories,
+    auditLogs: mergeAuditLogs(state.auditLogs, state.cloudAuditLogs),
   };
 }
 
@@ -795,6 +816,7 @@ function stopCloudOrders(): void {
   cloudOrdersRequest += 1;
   for (const unsubscribe of cloudOrdersUnsubscribes) unsubscribe();
   cloudOrdersUnsubscribes = [];
+  stopCloudAudit();
   setCloudAdmin(false, false);
 }
 
@@ -885,6 +907,7 @@ function startCloudOrders(uid: string): void {
         ),
         'semua pesanan admin',
       );
+      startCloudAudit();
     })
     .catch((error) => {
       console.warn('[firestore] gagal memeriksa status admin:', error);
@@ -894,9 +917,43 @@ function startCloudOrders(uid: string): void {
     });
 }
 
+let cloudAuditUnsubscribe: (() => void) | null = null;
+let cloudAuditRequest = 0;
+
+function stopCloudAudit(): void {
+  cloudAuditRequest += 1;
+  cloudAuditUnsubscribe?.();
+  cloudAuditUnsubscribe = null;
+}
+
+/** Pantau catatan audit Firestore; dipanggil hanya setelah status admin diketahui. */
+function startCloudAudit(): void {
+  if (!firestoreEnabled) return;
+
+  stopCloudAudit();
+  const request = cloudAuditRequest;
+
+  void subscribeAuditLogs(
+    (entries) => {
+      if (request !== cloudAuditRequest) return;
+      commit({ ...state, cloudAuditLogs: entries }, { persist: false });
+    },
+    (error) => console.warn('[firestore] gagal memantau log aktivitas:', error),
+  )
+    .then((unsubscribe) => {
+      if (request !== cloudAuditRequest) {
+        unsubscribe();
+        return;
+      }
+      cloudAuditUnsubscribe = unsubscribe;
+    })
+    .catch((error) => {
+      console.warn('[firestore] gagal memuat log aktivitas:', error);
+    });
+}
+
 let cloudInquiriesUnsubscribe: (() => void) | null = null;
 let cloudInquiriesRequest = 0;
-
 function stopCloudInquiries(): void {
   cloudInquiriesRequest += 1;
   cloudInquiriesUnsubscribe?.();
@@ -968,6 +1025,7 @@ function persist(next: AppState): Toast | null {
       legacyListings: next.legacyListings,
       guest: next.guest,
       platform: next.platform,
+      auditLogs: next.auditLogs,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     return null;
@@ -1044,6 +1102,33 @@ function syncCloudPlatform(platform: PlatformData): void {
   void saveCloudPlatform(sharedPlatformOf(platform)).catch((error) => {
     console.warn('[firestore] gagal menyimpan pengaturan platform:', error);
   });
+}
+
+/**
+ * Catat tindakan admin. Entri langsung ditambahkan ke state (optimistis) dan
+ * dikirim ke koleksi `auditLogs`; langganan cloud akan menggabungkannya tanpa
+ * duplikat karena memakai ID yang sama.
+ */
+function logAdminAction(action: AuditAction, target: string, detail: string): AuditLogEntry[] {
+  const uid = state.activeUid;
+  if (!uid) return state.auditLogs;
+
+  const profile = state.accounts[uid]?.profile;
+  const entry = createAuditEntry({
+    actorUid: uid,
+    actorName: profile?.name || profile?.email || 'Admin',
+    action,
+    target,
+    detail,
+  });
+
+  if (firestoreEnabled) {
+    void appendAuditLog(entry).catch((error) => {
+      console.warn('[firestore] gagal menyimpan log aktivitas:', error);
+    });
+  }
+
+  return [entry, ...state.auditLogs].slice(0, MAX_AUDIT_LOGS);
 }
 
 function toast(tone: Toast['tone'], message: string): Toast {
@@ -1150,6 +1235,7 @@ export const store = {
         !state.pendingRole &&
         !state.cloudOrders &&
         !state.cloudInquiries &&
+        !state.cloudAuditLogs &&
         !state.cloudAdmin &&
         !state.cloudAdminReady
       ) {
@@ -1162,6 +1248,7 @@ export const store = {
           pendingRole: null,
           cloudOrders: null,
           cloudInquiries: null,
+          cloudAuditLogs: null,
           cloudAdmin: false,
           cloudAdminReady: false,
         },
@@ -1209,6 +1296,7 @@ export const store = {
         platform: { ...state.platform, orders },
         cloudOrders: null,
         cloudInquiries: null,
+        cloudAuditLogs: null,
         cloudAdmin: false,
         cloudAdminReady: false,
       },
@@ -2007,20 +2095,30 @@ export const store = {
       [id]: { ...(state.platform.listingOverrides[id] ?? {}), ...patch },
     };
     const platform = { ...state.platform, listingOverrides: overrides };
+    const changes = Object.keys(patch).join(', ') || '-';
+    const auditLogs = logAdminAction('produk.ubah', id, `Field diubah: ${changes}`);
     syncCloudPlatform(platform);
     commit({
       ...state,
       platform,
+      auditLogs,
       toast: toast('success', 'Data produk diperbarui.'),
     });
   },
 
   adminResetOverrides(): void {
     const platform = { ...state.platform, listingOverrides: {} };
+    const count = Object.keys(state.platform.listingOverrides).length;
+    const auditLogs = logAdminAction(
+      'produk.reset',
+      '',
+      `${count} produk dikembalikan ke data awal.`,
+    );
     syncCloudPlatform(platform);
     commit({
       ...state,
       platform,
+      auditLogs,
       toast: toast('info', 'Perubahan produk dikembalikan ke data awal.'),
     });
   },
@@ -2030,46 +2128,68 @@ export const store = {
       ...state.platform,
       vouchers: [...state.platform.vouchers.filter((item) => item.code !== voucher.code), voucher],
     };
+    const auditLogs = logAdminAction(
+      'voucher.tambah',
+      voucher.code,
+      `${voucher.title} · tipe ${voucher.type} · min ${voucher.minSpend}`,
+    );
     syncCloudPlatform(platform);
     commit({
       ...state,
       platform,
+      auditLogs,
       toast: toast('success', `Voucher ${voucher.code} ditambahkan.`),
     });
   },
 
   adminRemoveVoucher(id: string): void {
+    const removed = state.platform.vouchers.find((item) => item.id === id);
     const platform = {
       ...state.platform,
       vouchers: state.platform.vouchers.filter((item) => item.id !== id),
     };
+    const auditLogs = logAdminAction(
+      'voucher.hapus',
+      removed?.code ?? id,
+      removed ? removed.title : 'Voucher tidak ditemukan di data lokal.',
+    );
     syncCloudPlatform(platform);
     commit({
       ...state,
       platform,
+      auditLogs,
       toast: toast('info', 'Voucher dihapus.'),
     });
   },
 
   adminAddBanner(banner: Banner): void {
     const platform = { ...state.platform, banners: [banner, ...state.platform.banners] };
+    const auditLogs = logAdminAction('banner.tambah', banner.id, banner.title);
     syncCloudPlatform(platform);
     commit({
       ...state,
       platform,
+      auditLogs,
       toast: toast('success', 'Banner promosi ditambahkan.'),
     });
   },
 
   adminRemoveBanner(id: string): void {
+    const removed = state.platform.banners.find((item) => item.id === id);
     const platform = {
       ...state.platform,
       banners: state.platform.banners.filter((item) => item.id !== id),
     };
+    const auditLogs = logAdminAction(
+      'banner.hapus',
+      id,
+      removed ? removed.title : 'Banner tidak ditemukan di data lokal.',
+    );
     syncCloudPlatform(platform);
     commit({
       ...state,
       platform,
+      auditLogs,
       toast: toast('info', 'Banner dihapus.'),
     });
   },
@@ -2079,10 +2199,16 @@ export const store = {
     if (label.trim()) labels[category] = label.trim();
     else delete labels[category];
     const platform = { ...state.platform, categoryLabels: labels };
+    const auditLogs = logAdminAction(
+      'kategori.label',
+      category,
+      label.trim() ? `Nama tampilan: ${label.trim()}` : 'Nama tampilan dihapus (kembali ke bawaan).',
+    );
     syncCloudPlatform(platform);
     commit({
       ...state,
       platform,
+      auditLogs,
       toast: toast('success', 'Nama kategori diperbarui.'),
     });
   },
@@ -2092,11 +2218,18 @@ export const store = {
       ? state.platform.hiddenCategories.filter((item) => item !== category)
       : [...state.platform.hiddenCategories, category];
     const platform = { ...state.platform, hiddenCategories: hidden };
+    const nowHidden = hidden.includes(category);
+    const auditLogs = logAdminAction(
+      'kategori.visibilitas',
+      category,
+      nowHidden ? 'Kategori disembunyikan dari katalog.' : 'Kategori ditampilkan kembali.',
+    );
     syncCloudPlatform(platform);
     commit({
       ...state,
       platform,
-      toast: toast('info', hidden.includes(category) ? 'Kategori disembunyikan.' : 'Kategori ditampilkan.'),
+      auditLogs,
+      toast: toast('info', nowHidden ? 'Kategori disembunyikan.' : 'Kategori ditampilkan.'),
     });
   },
 

@@ -1,6 +1,7 @@
 import { loadFirebase } from '../firebase';
 import type { Firestore } from 'firebase/firestore';
-import type { AccountData, Inquiry, Listing, Order, ProductReview, SharedPlatform } from '../types';
+import type { AccountData, AuditLogEntry, Inquiry, Listing, Order, ProductReview, SharedPlatform } from '../types';
+import { normalizeAuditEntry } from './audit-log';
 import { uploadListingImages, uploadOrderImages } from './storage';
 import { importOrdersOnServer } from './orders-api';
 
@@ -246,8 +247,47 @@ export async function savePlatform(platform: SharedPlatform): Promise<void> {
   });
 }
 
-/* --------------------------------- Ulasan --------------------------------- */
+/* ------------------------------ Log aktivitas ----------------------------- */
 
+/**
+ * Tulis satu catatan audit. Dokumen memakai ID yang sudah dibuat klien agar
+ * penulisan bersifat create (rules menolak update/delete).
+ */
+export async function appendAuditLog(entry: AuditLogEntry): Promise<void> {
+  const database = await getDb();
+  if (!database) return;
+
+  const { doc, setDoc } = await import('firebase/firestore');
+  await setDoc(
+    doc(database, 'auditLogs', entry.id),
+    stripUndefined({ ...entry }) as unknown as Record<string, unknown>,
+  );
+}
+
+/** Pantau catatan audit terbaru; hanya admin yang diizinkan rules. */
+export async function subscribeAuditLogs(
+  onData: (entries: AuditLogEntry[]) => void,
+  onError?: (error: unknown) => void,
+): Promise<Unsubscribe> {
+  const database = await getDb();
+  if (!database) return () => {};
+
+  const { collection, limit, onSnapshot, orderBy, query } = await import('firebase/firestore');
+  const q = query(collection(database, 'auditLogs'), orderBy('createdAt', 'desc'), limit(200));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const entries = snapshot.docs
+        .map((item) => normalizeAuditEntry({ ...item.data(), id: item.id }))
+        .filter((item): item is AuditLogEntry => Boolean(item));
+      onData(entries);
+    },
+    (error) => onError?.(error),
+  );
+}
+
+/* --------------------------------- Ulasan --------------------------------- */
 function reviewPayload(review: ProductReview): Record<string, unknown> {
   return stripUndefined({ ...review }) as unknown as Record<string, unknown>;
 }

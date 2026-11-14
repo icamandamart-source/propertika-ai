@@ -6,6 +6,7 @@ import {
   Cloud,
   Eye,
   EyeOff,
+  History,
   Megaphone,
   Package,
   Plus,
@@ -18,13 +19,15 @@ import {
 } from 'lucide-react';
 import SafeImage from '../components/SafeImage';
 import { SEED_BANNERS, SEED_VOUCHERS } from '../data/promos';
+import { AUDIT_ACTION_LABELS } from '../lib/audit-log';
 import { firestoreEnabled } from '../lib/firestore';
-import { formatDate, formatRupiah } from '../lib/format';
+import { formatDate, formatDateTime, formatRupiah } from '../lib/format';
 import { ORDER_STATUS_LABELS, ORDER_STATUS_TONE, isVoucherExpired, stockOf } from '../lib/marketplace';
 import { newId, store, useAppState } from '../lib/store';
 import {
   LISTING_CATEGORIES,
   ORDER_STATUSES,
+  type AuditLogEntry,
   type Banner,
   type Listing,
   type OrderStatus,
@@ -35,13 +38,13 @@ import {
 const SEED_VOUCHER_CODES = new Set(SEED_VOUCHERS.map((voucher) => voucher.code));
 const SEED_BANNER_IDS = new Set(SEED_BANNERS.map((banner) => banner.id));
 
-type Tab = 'produk' | 'pesanan' | 'voucher' | 'banner' | 'kategori';
+type Tab = 'produk' | 'pesanan' | 'voucher' | 'banner' | 'kategori' | 'log';
 
 const inputClass =
   'w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white';
 
 export default function AdminPage() {
-  const { listings, platformOrders, vouchers, banners, categories } = useAppState();
+  const { listings, platformOrders, vouchers, banners, categories, auditLogs } = useAppState();
   const [tab, setTab] = useState<Tab>('produk');
   const [query, setQuery] = useState('');
 
@@ -103,6 +106,7 @@ export default function AdminPage() {
           { id: 'voucher', label: 'Voucher', icon: TicketPercent },
           { id: 'banner', label: 'Banner', icon: Megaphone },
           { id: 'kategori', label: 'Kategori', icon: Settings2 },
+          { id: 'log', label: 'Log Aktivitas', icon: History },
         ].map((item) => (
           <button
             key={item.id}
@@ -240,6 +244,73 @@ export default function AdminPage() {
                   visible={visibleCategories.has(name)}
                 />
               ))}
+            </div>
+          </section>
+        )}
+
+                {tab === 'log' && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">Log Aktivitas Admin</h2>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Catatan tindakan admin terhadap katalog, voucher, banner, dan kategori. Catatan tidak bisa diubah atau dihapus.
+                </p>
+              </div>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-[10px] font-semibold text-slate-600">
+                {auditLogs.length} catatan
+              </span>
+            </div>
+
+            {firestoreEnabled ? (
+              <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-[11px] text-emerald-700">
+                Catatan dikirim ke Firestore dan tidak bisa diubah atau dihapus.
+              </p>
+            ) : (
+              <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-700">
+                Mode demo lokal: catatan hanya tersimpan di peramban ini.
+              </p>
+            )}
+
+            <div className="relative mt-3">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Cari aktor, tindakan, target, atau detail..."
+                className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-emerald-500 focus:bg-white"
+              />
+            </div>
+
+            <div className="mt-3 space-y-2">
+              {auditLogs
+                .filter((entry) =>
+                  `${entry.actorName} ${AUDIT_ACTION_LABELS[entry.action]} ${entry.target} ${entry.detail}`
+                    .toLowerCase()
+                    .includes(query.toLowerCase()),
+                )
+                .map((entry) => (
+                  <div key={entry.id} className="flex gap-3 rounded-xl border border-slate-200 p-3">
+                    <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-navy/5 text-navy">
+                      <History className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs font-semibold text-slate-800">{entry.actorName}</span>
+                        <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[9px] font-semibold text-brand-dark">
+                          {AUDIT_ACTION_LABELS[entry.action]}
+                        </span>
+                        {entry.target && (
+                          <span className="truncate text-[10px] font-medium text-slate-500">
+                            {entry.target}
+                          </span>
+                        )}
+                      </div>
+                      {entry.detail && <p className="mt-0.5 text-[11px] text-slate-600">{entry.detail}</p>}
+                      <p className="mt-1 text-[10px] text-slate-400">{formatDateTime(entry.createdAt)}</p>
+                    </div>
+                  </div>
+                ))}
             </div>
           </section>
         )}

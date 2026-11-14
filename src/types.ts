@@ -292,6 +292,32 @@ export interface PlatformData {
   hiddenCategories: string[];
 }
 
+/* ------------------------------ Audit admin ------------------------------ */
+
+export const AUDIT_ACTIONS = [
+  'produk.ubah',
+  'produk.reset',
+  'voucher.tambah',
+  'voucher.hapus',
+  'banner.tambah',
+  'banner.hapus',
+  'kategori.label',
+  'kategori.visibilitas',
+] as const;
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
+/** Satu catatan tindakan admin. Dokumen `auditLogs/{id}` tidak boleh diubah/dihapus. */
+export interface AuditLogEntry {
+  id: string;
+  actorUid: string;
+  actorName: string;
+  action: AuditAction;
+  /** Sasaran tindakan, mis. kode voucher, judul banner, atau ID listing. */
+  target: string;
+  detail: string;
+  createdAt: string;
+}
+
 /** Bagian PlatformData yang dibagi ke semua pengguna lewat Firestore. */
 export interface SharedPlatform {
   vouchers: Voucher[];

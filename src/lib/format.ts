@@ -34,6 +34,19 @@ export function formatDate(iso: string): string {
   return date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+/** 6 Nov 2026, 14.05 */
+export function formatDateTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('id-ID', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 /** Ringkasan spesifikasi untuk kartu listing. */
 export function formatSpecs(listing: {
   category: string;
