@@ -12,8 +12,8 @@
  *   npm run backup -- --only listings,orders
  */
 import 'dotenv/config';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { getAdmin } from '../server/admin.ts';
 import {
   backupFileName,
@@ -92,4 +92,19 @@ const kilobytes = (Buffer.byteLength(json, 'utf8') / 1024).toFixed(1);
 console.log(
   `\n[backup] ${totalDocuments(manifest)} dokumen dari ${collections.length} koleksi disimpan ke:\n  ${output} (${kilobytes} KB)`,
 );
+
+// Simpan hanya `--keep` berkas terbaru (bawaan 14) agar folder tidak membengkak.
+const keep = Number(argValue('keep') ?? '14');
+if (Number.isFinite(keep) && keep > 0) {
+  const folder = dirname(output);
+  const candidates = readdirSync(folder)
+    .filter((name) => /^firestore-.*\.json$/.test(name))
+    .map((name) => ({ name, time: statSync(join(folder, name)).mtimeMs }))
+    .sort((a, b) => b.time - a.time);
+  for (const item of candidates.slice(keep)) {
+    unlinkSync(join(folder, item.name));
+    console.log(`[backup] hapus backup lama: ${item.name}`);
+  }
+}
+
 if (hasFlag('quiet')) process.exit(0);

@@ -193,6 +193,7 @@ perkakas backup berbasis Admin SDK, jadi tidak perlu gcloud atau bucket tambahan
 ```powershell
 npm run backup                                  # semua koleksi -> backups/firestore-<waktu>.json
 npm run backup -- --only listings,orders        # koleksi tertentu
+npm run backup -- --keep 30                     # simpan 30 backup terbaru (bawaan 14)
 npm run backup -- --out backups/sebelum-rilis.json
 ```
 
@@ -215,8 +216,11 @@ pakai `--merge` bila hanya ingin menambahkan field yang hilang.
 
 Untuk produksi, simpan salinan di luar mesin ini dan jadwalkan otomatis:
 
-1. Windows: Task Scheduler → jalankan `npm run backup` setiap hari, lalu salin folder
-   `backups/` ke OneDrive/Google Drive atau bucket Cloud Storage.
+1. Windows: daftarkan sekali dengan
+   `powershell -ExecutionPolicy Bypass -File scripts\install-backup-task.ps1`
+   (bawaan tiap hari 02:00, menyimpan 14 backup). Ubah dengan `-Time 23:30 -Keep 30`,
+   hapus dengan `-Uninstall`. Hasil dan error tercatat di `backups/backup.log`.
+   Setelah itu salin folder `backups/` ke OneDrive/Google Drive atau bucket Cloud Storage.
 2. Linux/VPS: tambahkan cron, misalnya `0 2 * * * cd /srv/propertika && npm run backup`.
 3. Untuk arsip jangka panjang di Google Cloud, ekspor native juga bisa dipakai:
    `gcloud firestore export gs://<bucket-anda>/firestore/$(date +%Y%m%d)`.
@@ -341,6 +345,8 @@ server/
 scripts/
   backup-firestore.ts  npm run backup: ekspor semua koleksi ke JSON
   restore-firestore.ts npm run backup:restore: dry-run/pulihkan backup
+  install-backup-task.ps1 Daftarkan/hapus backup harian di Task Scheduler
+  run-backup.cmd       Pembungkus yang dipanggil Scheduled Task
   midtrans-simulate.mjs Simulator webhook Midtrans untuk pengujian lokal
 backups/               Hasil backup Firestore (diabaikan git, berisi data pribadi)
 vite.config.ts         Konfigurasi Vite + Tailwind
