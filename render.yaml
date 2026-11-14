@@ -1,0 +1,102 @@
+# Render Blueprint for Propertika AI
+# 1. Push this repo to GitHub
+# 2. Go to https://dashboard.render.com/blueprints
+# 3. Click "New Blueprint Instance" → connect your repo
+# 4. Fill in environment variables (see .env.production.template)
+# 5. Deploy!
+
+services:
+  - type: web
+    name: propertika-ai
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free  # or starter for production
+    region: singapore  # or oregon, frankfurt
+    healthCheckPath: /api/health
+    envVars:
+      # Required - Firebase Client (from your Firebase Console > Project Settings > General > Your Apps)
+      - key: VITE_FIREBASE_API_KEY
+        sync: false
+      - key: VITE_FIREBASE_AUTH_DOMAIN
+        sync: false
+      - key: VITE_FIREBASE_PROJECT_ID
+        sync: false
+      - key: VITE_FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: VITE_FIREBASE_MESSAGING_SENDER_ID
+        sync: false
+      - key: VITE_FIREBASE_APP_ID
+        sync: false
+      - key: VITE_DATA_BACKEND
+        value: firestore
+      - key: VITE_FIREBASE_FIRESTORE_DB
+        value: "(default)"
+
+      # Required - Firebase Admin (from Firebase Console > Project Settings > Service Accounts > Generate new private key)
+      # Paste the ENTIRE JSON as one line (escape newlines as \n)
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
+      - key: AI_QUOTA_BACKEND
+        value: firestore
+
+      # Required for AI Images (Free tier - Cloudflare Workers AI)
+      # Get from: https://dash.cloudflare.com → Workers AI → Use REST API
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+
+      # Required for Persistent Image Storage (Free 25GB - Cloudinary)
+      # Get from: https://cloudinary.com/console
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+
+      # Optional - Payment (Midtrans)
+      # Get from: https://dashboard.midtrans.com → Settings → Access Keys
+      - key: MIDTRANS_SERVER_KEY
+        sync: false
+      - key: MIDTRANS_IS_PRODUCTION
+        value: "false"
+      - key: APP_URL
+        sync: false  # Will be auto-filled after first deploy: https://your-app.onrender.com
+
+      # Optional - AI Text Model (Gemini)
+      # Get from: https://aistudio.google.com/apikey
+      - key: GEMINI_API_KEY
+        sync: false
+
+      # Optional - Security (Enable AFTER first deploy + custom domain)
+      # - key: APP_CHECK_REQUIRED
+      #   value: "true"
+      # - key: VITE_FIREBASE_APP_CHECK_SITE_KEY
+      #   sync: false
+
+      # Optional - Logging
+      - key: LOG_LEVEL
+        value: "info"
+      - key: PORT
+        value: "3000"
+
+    # Persistent disk for uploads (if not using Cloudinary)
+    # disk:
+    #   name: uploads
+    #   mountPath: /app/uploads
+    #   sizeGB: 1
+
+  # Optional: Cron job for daily Firestore backup
+  # Requires: Firebase Admin credentials + billing enabled on Render
+  # - type: cron
+  #   name: firestore-backup
+  #   schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  #   command: npm run backup
+  #   envVars:
+  #     - key: FIREBASE_SERVICE_ACCOUNT
+  #       sync: false
+  #     - fromService:
+  #         name: propertika-ai
+  #         type: web
+  #         property: envVars.FIREBASE_SERVICE_ACCOUNT
